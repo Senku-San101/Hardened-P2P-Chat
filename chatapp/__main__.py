@@ -26,7 +26,7 @@ def _raw_recv(stream: CellStream) -> bytes:
 
 def run_receiver() -> None:
     print("[*] Role: RECEIVER")
-    tor = TorManager()
+    tor = TorManager("receiver")
     channel = SecureChannel.create()
 
     priv_b32, pub_b32 = generate_client_auth_keypair()
@@ -47,8 +47,8 @@ def run_receiver() -> None:
     )
     print_oob(bundle)
 
-    print(f"[*] Listening on 127.0.0.1:{config.DEFAULT_APP_PORT} ...")
-    srv = listen_loopback(config.DEFAULT_APP_PORT)
+    print(f"[*] Listening on 127.0.0.1:{tor.app_port} ...")
+    srv = listen_loopback(tor.app_port)
     try:
         conn, _ = srv.accept()
         stream = CellStream(conn)
@@ -72,7 +72,7 @@ def run_sender() -> None:
     raw = input("Paste OOB bundle (onion:auth_privkey:fingerprint): ")
     bundle = OOBBundle.decode(raw)
 
-    tor = TorManager()
+    tor = TorManager("sender")
     channel = SecureChannel.create()
     tor.install_client_auth(bundle.onion_address, bundle.client_auth_privkey)
     print("[*] Launching Tor (Snowflake)...")
@@ -81,7 +81,7 @@ def run_sender() -> None:
     print("[*] Connecting to onion service...")
     stream = connect_via_socks(
         bundle.onion_address, config.ONION_VIRTUAL_PORT,
-        config.DEFAULT_SENDER_SOCKS)
+        tor.socks_port)
     try:
         _raw_send(stream._sock, PREKEY_REQ)  # noqa: SLF001 handshake
         peer_bundle = _raw_recv(stream)
