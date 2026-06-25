@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.log
+# Never commit runtime secrets / key material
+runtime/
+*.auth_private
+*.auth
+client_keys/
+onion_auth/
+state/
+*.session

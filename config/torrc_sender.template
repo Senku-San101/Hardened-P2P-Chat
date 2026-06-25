@@ -1,0 +1,20 @@
+# Sender torrc template.
+# Placeholders {{...}} are substituted by chatapp at runtime.
+#
+# The sender connects out through Snowflake and presents an x25519
+# client-auth private key for the target v3 onion service.
+
+SocksPort {{SOCKS_PORT}}
+DataDirectory {{DATA_DIR}}
+ControlPort {{CONTROL_PORT}}
+CookieAuthentication 1
+
+# --- Pluggable transport: Snowflake ---
+UseBridges 1
+ClientTransportPlugin snowflake exec /usr/bin/snowflake-client
+{{BRIDGE_LINES}}
+
+# --- Client-side onion authorization ---
+# Directory holds <onion-host>.auth_private files of the form:
+#   <56-char-onion-without-.onion>:descriptor:x25519:<base32 private key>
+ClientOnionAuthDir {{ONION_AUTH_DIR}}

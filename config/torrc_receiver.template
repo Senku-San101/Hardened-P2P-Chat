@@ -1,0 +1,23 @@
+# Receiver torrc template.
+# Placeholders {{...}} are substituted by chatapp at runtime.
+#
+# The receiver runs a v3 onion service protected by x25519 client
+# authorization. A SOCKS port is also opened because the receiver may
+# itself need to reach the network through Snowflake during bootstrap;
+# set to 0 if you do not want an open SOCKS port.
+
+SocksPort {{SOCKS_PORT}}
+DataDirectory {{DATA_DIR}}
+ControlPort {{CONTROL_PORT}}
+CookieAuthentication 1
+
+# --- Pluggable transport: Snowflake (domain-fronted, maintained) ---
+UseBridges 1
+ClientTransportPlugin snowflake exec /usr/bin/snowflake-client
+{{BRIDGE_LINES}}
+
+# --- v3 Onion service with client authorization ---
+HiddenServiceDir {{HS_DIR}}
+HiddenServiceVersion 3
+HiddenServicePort 80 127.0.0.1:{{APP_PORT}}
+# Per-client x25519 public keys live in {{HS_DIR}}/authorized_clients/*.auth
