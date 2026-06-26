@@ -16,7 +16,7 @@ state-level passive observer.
 
 | Layer | Choice | Why |
 |------|--------|-----|
-| Transport | **Tor** via the **Snowflake** pluggable transport | Domain-fronted WebRTC traffic that looks like ordinary web calls; maintained and works today (meek-azure is deprecated). No VPN, no V2Ray, no third-party proxy that becomes a single observation point. |
+| Transport | **Tor** via the **Snowflake** pluggable transport | Domain-fronted WebRTC traffic that looks like ordinary web calls; maintained and works today (meek-azure is deprecated). No VPN, no third-party proxy that becomes a single observation point. |
 | Destination hiding | **v3 onion service + x25519 client authorization** | Without the client's private key, Tor will not even serve the descriptor. Scanning/enumeration is infeasible. (v2 "stealth cookies" no longer exist in modern Tor.) |
 | End-to-end encryption | **X3DH + Double Ratchet** (pure-Python) | Forward secrecy and deniability; compromise of one message key does not expose past or future messages. No long-term symmetric key. |
 | Traffic analysis resistance | **Fixed 1024-byte cells + WTF-PAD-style adaptive padding** | Uniform cell sizes and randomized inter-cell timing defeat passive size/timing correlation, including during idle periods. |
