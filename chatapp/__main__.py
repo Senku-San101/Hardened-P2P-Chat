@@ -4,6 +4,7 @@ from __future__ import annotations
 import socket
 import struct
 import sys
+import time
 
 from . import config
 from .crypto import SecureChannel
@@ -79,9 +80,24 @@ def run_sender() -> None:
     tor.launch(tor.render_sender_torrc())
 
     print("[*] Connecting to onion service...")
-    stream = connect_via_socks(
-        bundle.onion_address, config.ONION_VIRTUAL_PORT,
-        tor.socks_port)
+    retries = 15
+    delay_s = 10
+    stream = None
+    for attempt in range(1, retries + 1):
+        try:
+            stream = connect_via_socks(
+                bundle.onion_address, config.ONION_VIRTUAL_PORT,
+                tor.socks_port)
+            print("[*] Connected successfully!")
+            break
+        except (ConnectionError, TimeoutError) as e:
+            if attempt == retries:
+                print(f"[-] Connection failed after {retries} attempts.")
+                raise e
+            print(f"[*] Onion service not yet reachable. (This is normal and takes up to 1-2 minutes for Tor to publish the descriptor.)")
+            print(f"    Retrying in {delay_s}s... [Attempt {attempt}/{retries}]")
+            time.sleep(delay_s)
+
     try:
         _raw_send(stream._sock, PREKEY_REQ)  # noqa: SLF001 handshake
         peer_bundle = _raw_recv(stream)

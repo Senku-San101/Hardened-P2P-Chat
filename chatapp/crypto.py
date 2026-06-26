@@ -1,28 +1,40 @@
 """End-to-end encryption: X3DH key agreement + Double Ratchet messaging.
 
-Bound to the maintained pure-Python `X3DH` and `DoubleRatchet` libraries
-(by Tim Henkes / the python-omemo project). Those libraries are
-asyncio-based and expose abstract base classes that an application must
-subclass to pin concrete cryptographic choices. We pin:
+Bound to the pure-Python `X3DH` and `DoubleRatchet` libraries
+(by Tim Henkes / the python-omemo project), pinned to **1.3.0**.
+These are asyncio-based and expose abstract base classes that an
+application must subclass to pin concrete cryptographic choices. We pin:
 
   * Curve25519 / XEdDSA identity & prekeys
-  * HKDF-SHA-256 for the X3DH and root-chain KDFs
-  * AES-256-GCM AEAD for Double Ratchet message encryption
+  * HKDF-SHA-256 for the X3DH and Double Ratchet root chain
+  * HMAC-SHA-256 message chain
+  * AES-256-CBC + HMAC-SHA-256 AEAD for message encryption
 
-All key material stays in memory; `wipe()` is a best-effort zeroization.
+All key material stays in memory; `wipe()` drops references.
 
 The rest of the app is synchronous, so async library calls are driven
 through a private event loop via `_run()`.
+
+API reference (X3DH/DoubleRatchet 1.3.0):
+  * BaseState.create(identity_key_format, hash_function, info,
+                     identity_key_pair=None)  -> no prekey count here
+  * BaseState.generate_pre_keys(num_pre_keys)
+  * get_shared_secret_active(bundle)  -> (ss, ad, x3dh.Header)
+  * get_shared_secret_passive(header) -> (ss, ad, SignedPreKeyPair)
+  * DR.encrypt_initial_message(... , shared_secret, recipient_ratchet_pub,
+                               message, associated_data) -> (dr, EncryptedMessage)
+  * DR.decrypt_initial_message(... , shared_secret, own_ratchet_priv,
+                               message, associated_data) -> (dr, plaintext)
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
+import inspect
 import json
 from dataclasses import dataclass
 from typing import Any, Optional
-
-from nacl import utils as nacl_utils
 
 from doubleratchet import DoubleRatchet as DR
 from doubleratchet import EncryptedMessage, Header
@@ -39,6 +51,8 @@ INFO_X3DH = b"zt-chat-x3dh-v1"
 INFO_ROOT = b"zt-chat-dr-root-v1"
 INFO_AEAD = b"zt-chat-dr-aead-v1"
 DR_AD = b"zt-chat-associated-data-v1"
+NUM_PRE_KEYS = 100
+MAX_SKIPPED = 100
 
 
 # --- Double Ratchet concrete configuration -------------------------------
@@ -72,12 +86,34 @@ class _DHRatchet(dhr25519.DiffieHellmanRatchet):
     pass
 
 
-_DR_KWARGS = dict(
+def _encode_dr_header(header: Header) -> bytes:
+    return b"|".join([
+        header.ratchet_pub,
+        str(header.previous_sending_chain_length).encode(),
+        str(header.sending_chain_length).encode(),
+    ])
+
+
+class _DoubleRatchet(DR):
+    """Concrete Double Ratchet binding our associated-data construction.
+
+    The header is authenticated by mixing it into the AEAD associated data,
+    so an attacker cannot tamper with ratchet_pub or chain counters.
+    """
+
+    @staticmethod
+    def _build_associated_data(associated_data: bytes, header: Header) -> bytes:
+        return associated_data + b"||" + _encode_dr_header(header)
+
+
+# Config kwargs shared by encrypt_initial_message / decrypt_initial_message.
+_DR_CONFIG = dict(
     diffie_hellman_ratchet_class=_DHRatchet,
     root_chain_kdf=_RootKDF,
     message_chain_kdf=_MsgKDF,
     message_chain_constant=b"\x01\x02",
-    dos_protection_threshold=100,
+    dos_protection_threshold=10,
+    max_num_skipped_message_keys=MAX_SKIPPED,
     aead=_AEAD,
 )
 
@@ -109,14 +145,21 @@ def fingerprint(identity_pub_bytes: bytes) -> str:
 
 def verify_fingerprint(expected_hex: str, identity_pub_bytes: bytes) -> None:
     actual = fingerprint(identity_pub_bytes)
-    if not nacl_utils.bytes_eq(
+    if not hmac.compare_digest(
         bytes.fromhex(expected_hex), bytes.fromhex(actual)
     ):
         raise IdentityFingerprintMismatch(expected=expected_hex, actual=actual)
 
 
-def _run(coro: Any) -> Any:
-    """Drive an async library call from synchronous code."""
+def _run(result: Any) -> Any:
+    """Drive an async library call from synchronous code.
+
+    Tolerates non-awaitables: in X3DH/DoubleRatchet 1.3.0 most methods are
+    coroutines, but a few (e.g. generate_pre_keys) are synchronous. If the
+    argument is not awaitable we return it unchanged.
+    """
+    if not inspect.isawaitable(result):
+        return result
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():  # pragma: no cover - defensive
@@ -124,7 +167,7 @@ def _run(coro: Any) -> Any:
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+    return loop.run_until_complete(result)
 
 
 class SecureChannel:
@@ -139,13 +182,15 @@ class SecureChannel:
     @classmethod
     def create(cls) -> "SecureChannel":
         ch = cls()
-        # identity_key_format=Curve25519, sign prekeys, 100 one-time prekeys.
-        ch._state = _X3DHState.create(
+        state = _X3DHState.create(
             identity_key_format=x3dh.IdentityKeyFormat.CURVE_25519,
             hash_function=x3dh.HashFunction.SHA_256,
             info=INFO_X3DH,
         )
-        ch._identity_pub = ch._state.bundle.identity_key
+        # generate_pre_keys is synchronous in 1.3.0.
+        state.generate_pre_keys(NUM_PRE_KEYS)
+        ch._state = state
+        ch._identity_pub = state.bundle.identity_key
         return ch
 
     @property
@@ -164,7 +209,7 @@ class SecureChannel:
             "identity_key": b.identity_key.hex(),
             "signed_pre_key": b.signed_pre_key.hex(),
             "signed_pre_key_sig": b.signed_pre_key_sig.hex(),
-            "pre_keys": [pk.hex() for pk in b.pre_keys],
+            "pre_keys": sorted(pk.hex() for pk in b.pre_keys),
         }
         return json.dumps(payload, separators=(",", ":")).encode()
 
@@ -177,18 +222,19 @@ class SecureChannel:
             signed_pre_key=bytes.fromhex(env["spk"]),
             pre_key=bytes.fromhex(env["pk"]) if env.get("pk") else None,
         )
-        shared_secret, associated_data, _ = _run(
+        shared_secret, associated_data, spk_pair = _run(
             self._state.get_shared_secret_passive(header)
         )
-        self._ratchet = _run(DR.create_from_shared_secret(
+        enc = self._decode_wire(bytes.fromhex(env["ct"]))
+        # The responder's own ratchet private key is its signed-prekey priv,
+        # because the initiator targeted recipient_ratchet_pub = signed_pre_key.
+        self._ratchet, _plain = _run(_DoubleRatchet.decrypt_initial_message(
             shared_secret=shared_secret,
-            recipient_ratchet_pub=bytes.fromhex(env["dh"]),
+            own_ratchet_priv=spk_pair.priv,
+            message=enc,
             associated_data=associated_data or DR_AD,
-            **_DR_KWARGS,
+            **_DR_CONFIG,
         ))
-        # Decrypt the piggy-backed first ciphertext to advance the ratchet.
-        if env.get("ct"):
-            self._decrypt_wire(bytes.fromhex(env["ct"]))
 
     # --- initiator (sender) -------------------------------------------
     def start_initiator(self, peer_bundle: bytes, expected_fp: str) -> bytes:
@@ -200,25 +246,23 @@ class SecureChannel:
             identity_key=peer_ik,
             signed_pre_key=bytes.fromhex(d["signed_pre_key"]),
             signed_pre_key_sig=bytes.fromhex(d["signed_pre_key_sig"]),
-            pre_keys=[bytes.fromhex(pk) for pk in d["pre_keys"]],
+            pre_keys=frozenset(bytes.fromhex(pk) for pk in d["pre_keys"]),
         )
         shared_secret, associated_data, header = _run(
             self._state.get_shared_secret_active(remote_bundle)
         )
-        ratchet, enc = _run(DR.encrypt_initial_message(
+        self._ratchet, enc = _run(_DoubleRatchet.encrypt_initial_message(
             shared_secret=shared_secret,
             recipient_ratchet_pub=remote_bundle.signed_pre_key,
             message=b"\x00",  # ratchet warm-up, ignored by app layer
             associated_data=associated_data or DR_AD,
-            **_DR_KWARGS,
+            **_DR_CONFIG,
         ))
-        self._ratchet = ratchet
         envelope = {
             "ik": header.identity_key.hex(),
             "ek": header.ephemeral_key.hex(),
             "spk": header.signed_pre_key.hex(),
             "pk": header.pre_key.hex() if header.pre_key else "",
-            "dh": enc.header.ratchet_pub.hex(),
             "ct": self._encode_wire(enc).hex(),
         }
         return json.dumps(envelope, separators=(",", ":")).encode()
@@ -246,12 +290,6 @@ class SecureChannel:
         return EncryptedMessage(header=header,
                                 ciphertext=bytes.fromhex(obj["ct"]))
 
-    def _decrypt_wire(self, blob: bytes) -> bytes:
-        assert self._ratchet is not None
-        enc = self._decode_wire(blob)
-        pt, _ = _run(self._ratchet.decrypt_message(enc, DR_AD))
-        return pt
-
     # --- messaging -----------------------------------------------------
     def encrypt(self, plaintext: bytes) -> bytes:
         if self._ratchet is None:
@@ -262,7 +300,8 @@ class SecureChannel:
     def decrypt(self, ciphertext: bytes) -> bytes:
         if self._ratchet is None:
             raise RuntimeError("channel not established")
-        return self._decrypt_wire(ciphertext)
+        enc = self._decode_wire(ciphertext)
+        return _run(self._ratchet.decrypt_message(enc, DR_AD))
 
     # --- teardown ------------------------------------------------------
     def wipe(self) -> None:
