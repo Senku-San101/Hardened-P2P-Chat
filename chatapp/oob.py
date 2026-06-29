@@ -73,19 +73,36 @@ def render_qr(text: str) -> str:
 
 
 def print_oob(bundle: OOBBundle) -> None:
-    line = "=" * 72
-    print(line)
-    print("SHARE THESE THREE ITEMS WITH THE SENDER OVER A TRUSTED CHANNEL ONLY")
-    print(line)
-    print(f"Onion address : {bundle.onion_address}")
-    print(f"Auth privkey  : {bundle.client_auth_privkey}")
-    print(f"Fingerprint   : {bundle.identity_fingerprint}")
-    print(line)
-    print("Compact (single line):")
-    print(bundle.encode())
+    cyan = "\033[36m"
+    yellow = "\033[33m"
+    magenta = "\033[35m"
+    green = "\033[32m"
+    reset = "\033[0m"
+    bold = "\033[1m"
+
+    # Box for connection details
+    print(f"\n{yellow}┌{'─' * 88}┐{reset}")
+    print(f"{yellow}│{' ' * 16}{bold}SHARE SENSITIVE CONNECTION DATA VIA TRUSTED CHANNEL ONLY{reset}{' ' * 16}{yellow}│{reset}")
+    print(f"{yellow}└{'─' * 88}┘{reset}")
+    
+    print(f"{cyan}┌{'─' * 88}┐{reset}")
+    print(f"{cyan}│{bold}  1. Onion Address :{reset} {green}{bundle.onion_address:<67}{reset}{cyan}│{reset}")
+    print(f"{cyan}│{bold}  2. SOCKS Auth Key:{reset} {green}{bundle.client_auth_privkey:<67}{reset}{cyan}│{reset}")
+    print(f"{cyan}│{bold}  3. Fingerprint   :{reset} {magenta}{bundle.identity_fingerprint:<67}{reset}{cyan}│{reset}")
+    print(f"{cyan}└{'─' * 88}┘{reset}")
+    
+    # Print the compact bundle cleanly for perfect copy-pasting without borders
+    print(f"\n{bold}COMPACT BUNDLE (Single-line for easy copy/paste):{reset}")
+    print(f"\033[44m\033[97m {bundle.encode()} \033[0m\n")
+
     qr = render_qr(bundle.encode())
     if qr:
-        print(line)
-        print("QR (scan with a trusted offline device):")
-        print(qr)
-    print(line)
+        print(f"{yellow}┌{'─' * 88}┐{reset}")
+        print(f"{yellow}│  SCAN QR CODE (Secure connection details):                                             │{reset}")
+        print(f"{yellow}└{'─' * 88}┘{reset}")
+        for qr_line in qr.splitlines():
+            if qr_line.strip():
+                print(f"  {qr_line}")
+        print(f"{yellow}┌{'─' * 88}┐{reset}")
+
+

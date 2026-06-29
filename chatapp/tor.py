@@ -147,7 +147,9 @@ class TorManager:
 
         def _bootstrap(line: str) -> None:
             if "Bootstrapped" in line:
-                print(f"[tor] {line}")
+                # Color '[tor]' grey, status text cyan
+                print(f"\033[90m[tor]\033[0m \033[36m{line}\033[0m")
+
 
         self._process = stem.process.launch_tor(
             torrc_path=str(torrc_path),
